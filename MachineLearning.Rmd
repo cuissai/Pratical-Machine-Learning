@@ -1,0 +1,140 @@
+---
+title: "Pratical Machine Learning"
+author: "cuissai"
+date: "Monday, May 11, 2015"
+output: 
+    html_document:
+      fig_caption: yes
+---
+```{r,eval=FALSE,echo=FALSE,cache=TRUE}
+library(caret)
+library(pgmm)
+library(tree)
+library(ggplot2)
+```
+
+
+Six subjects were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: five classes A B C D E
+ (Class A) exactly according to the specification
+ (Class B) throwing the elbows to the front
+ (Class C) lifting the dumbbell only halfway
+ (Class D) lowering the dumbbell only halfway
+ (Class E) throwing the hips to the front
+For the six subjects the data are collected with the accelerometers on the belt, forearm, arm and dumbell.
+Can we predict in which fashion the movement are performed.
+
+
+```{r}
+#downloading
+#reading the dataset
+training <- read.csv(url("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"),na.strings=c("NA","#DIV/0!",""))
+testingSample <- read.csv(url("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"),na.strings=c("NA","#DIV/0!",""))
+```
+
+## Exploratory analysis
+
+The training dataset contains 19622 observations to make a model and the test / validation dataset has only 20 observations for the test assignement. We have 160 potential explicatives variables
+The six participants have homogeneous data and approx similar number of data rows.
+There are variables in the data set a time series, but the time effect is not very strong. We have a good separation of classes
+```{r}
+#names(training)
+table(training$user_name)
+table(training$classe ,training$user_name)
+#str(training$classe)
+#table(training$cvtd_timestamp, training$user_name)
+#length(unique(training$cvtd_timestamp))
+plot(training$accel_arm_x, col=training$classe, ylab="arm acceleration",main="acceleration for in order class A, B, C, D, E")
+legend("topright", col=1:5, legend=LETTERS[1:5], pch=15)
+```
+
+```{r ,echo=FALSE}
+
+#summary(train$cvtd_timestamp) # from 28/11/2011 to 5/12/2011
+
+# good seperation of the classes
+op <- par(mfrow=c(2,2), mar=c(4, 4, 2, 2) + 0.1)
+plot(training$yaw_belt, training$accel_belt_z, col=training$classe)
+legend("topright", col=1:5, legend=LETTERS[1:5], pch=15)
+plot(training$roll_belt, training$roll_forearm, col=training$classe)
+legend("top", col=1:5, legend=LETTERS[1:5], pch=15)
+plot(training$roll_belt, training$yaw_belt, col=training$classe, cex=0.7)
+legend("top", col=1:5, legend=LETTERS[1:5], pch=15)
+par(op)
+```
+
+## Preprocessing
+
+we applied function nearZeroVar to reduce the number of predictors.
+The variables with a small variance that got the value TRUE are removed, and variables with a high amount of missing values are deleted.      
+The participants worked the exercises in time, but that is not the right information for predicting the type of activity therefor all the variables 'time' were removed.
+
+```{r,cache=TRUE}
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+head(nsv, 10)
+```
+
+```{r, echo=TRUE }
+# remove variables with near zero variance
+newnames <- rownames(nsv)[!nsv$nzv]
+training <- training[, newnames]
+# remove variables with more than 90% missing values
+missvars <- apply(training, 2, function(x) sum(is.na(x))/length(x))
+w <- which(missvars > .9);  
+newnames <- names(missvars[-w])
+ # remove time variables
+newnames <- newnames[-c(1:6)]
+training <- training[, newnames]
+names(training)
+```
+
+Now we have only 53 predictor variables.
+select inside the training data 70 % of the data rows for training and the rest for testing the model, so we can make cross validation.
+
+```{r ,echo=TRUE, message=FALSE, warning=FALSE}
+library(caret)
+set.seed(44944)
+ParTraining <- createDataPartition(y=training$classe, p=0.7, list=FALSE) 
+trainingSet <- training[ParTraining, ]
+testingSet <- training[-ParTraining,]
+dim(trainingSet); dim(testingSet)
+```
+
+## Feature selection
+
+It is not easy to say which of the 53 predictor variables are really important for prediction. A first small random sample is used to train a random forest model and then to look at the variable importance.
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+library(randomForest)
+inSelect <- sample(1:nrow(trainingSet), 1000, replace=FALSE)
+modfit <-  train(y=trainingSet$classe[inSelect], x=trainingSet[inSelect, -53],   trControl=trainControl(method="cv", number=3, repeats=2), tuneLength = 1) 
+best <- varImp(modfit)
+tab <- best$importance;    or <-order(tab$Overall, decreasing = TRUE)  
+tab$names <- rownames(tab)
+tab <- tab[or,]
+varnames <- tab$names[1:25] # first best 25 predictors
+varnames 
+```
+
+Some variables are correlated, like (magnet_belt_y) and (magnet_belt_z). coefficient 0.8.
+In following figure can we see, only one of this two variables would suffice. 
+
+```{r, echo=TRUE, fig.width=4, fig.height=4}
+cor(trainingSet$magnet_belt_y, trainingSet$magnet_belt_z)
+plot(trainingSet$magnet_belt_y, trainingSet$magnet_belt_z, col=training$classe, main="Magnet Belt")
+```
+
+## model building
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+modfit <-  train(y=trainingSet$classe, x=trainingSet[, varnames],   trControl=trainControl(method="cv", number=3, repeats=2), tuneLength = 1)
+modfit
+pr <- predict(modfit, newdata=testingSet[,varnames])
+confusionMatrix(table(pr, testingSet$classe))
+```
+
+## prediction on test sample data set
+
+```{r, echo=FALSE}
+predTest <-  predict(modfit, testingSample[, varnames])
+data.frame(problem_id=testingSample$problem_id, predTest)
+```
